@@ -1,0 +1,20 @@
+# Local artifacts
+__pycache__/
+*.py[cod]
+.venv/
+.env
+
+# Real datasets are not committed; only the tiny sample under data/sample/ is.
+data/raw/
+data/processed/
+data/dogfacenet/
+
+# Cached model weights / large blobs
+*.pt
+*.pth
+*.bin
+*.safetensors
+
+# Run outputs (kept .gitkeep)
+results/*
+!results/.gitkeep
