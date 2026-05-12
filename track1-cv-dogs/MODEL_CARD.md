@@ -108,7 +108,7 @@ DINOv2:
 |---|---|---|---|
 | 0.62 | 0.859 | 0.033 | 0.433 |
 | 0.70 (default) | 0.811 | 0.100 | 0.800 |
-| 0.78 | 0.522 | 0.367 | 0.933 |
+| 0.78 | 0.637 | 0.467 | 0.967 |
 
 The sweep is a diagnostic, not a recommendation. Final thresholds
 should be chosen on a validation fold and frozen before reporting;
@@ -133,17 +133,25 @@ and contributes no numbers in this section.
   quality, gallery composition, and the prior probability of an open-set
   query. The `--sweep` flag on `evaluate.py` is useful on validation data
   only; final test metrics should use thresholds chosen beforehand.
-- **Same-coat confusion (observed).** In `failure_cases.png`,
-  dark-coated dogs are confidently mis-matched to other dark-coated
-  identities at similarities 0.71-0.75. The true identity is usually
-  within the top-5 at similarity within 0.02 of rank 1; this drives
-  most of the Rank-1 / Rank-5 gap (0.893 vs. 0.985).
-- **Open-set abstention bias (observed).** Most unknown-query failures
-  land between `tau_possible=0.55` and `tau_match=0.70`, producing
-  `possible_match` rather than a confident `unknown`. Hard
-  `unknown_accuracy` is 0.100 even though non-match rejection is 0.800
-  and AUROC is 0.871. The separating signal is in the embedding space;
-  threshold choice is leaving it on the table.
+- **Recurring identity-pair confusion (observed).** In
+  `failure_cases.png`, 14 closed-set queries produce a confident
+  `match` to the wrong gallery identity at similarities 0.700-0.826.
+  The confusions cluster: the same gallery identity attracts multiple
+  queries from the same wrong querier (e.g. `dog_585`'s queries 2 and
+  3 both rank-1 to `dog_456`; `dog_599`'s queries 1 and 3 both rank-1
+  to `dog_788`). The true identity is usually within the top-5 at a
+  similarity within ~0.02 of rank 1, which is what the Rank-1 / Rank-5
+  gap (0.893 vs. 0.985) reflects.
+- **Open-set abstention bias (observed).** 21 of 30 unknown queries
+  land between `tau_possible=0.55` and `tau_match=0.70` (similarities
+  0.561-0.697), producing `possible_match` rather than a confident
+  `unknown`. Only 3 are hard-rejected; 6 cross `tau_match` and become
+  confident false alarms (e.g. all 3 queries from open-set identity
+  `dog_598` rank-1 to gallery `dog_13` at similarities 0.703, 0.740,
+  0.812). Hard `unknown_accuracy` is therefore 0.100 even though
+  non-match rejection is 0.800 and AUROC is 0.871. The separating
+  signal is in the embedding space; threshold choice is leaving it
+  on the table.
 - **Global features only.** No body / face fusion, no part-based
   matching, no re-ranking. Same-breed near-duplicates and occluded
   faces are the expected failure modes.
