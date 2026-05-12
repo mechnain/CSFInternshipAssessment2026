@@ -59,11 +59,14 @@ def create_split(
     open_set_fraction: float,
     seed: int,
     overwrite: bool,
+    queries_per_identity: int = 0,
 ) -> Path:
     if refs_per_identity < 1:
         raise ValueError("refs_per_identity must be at least 1.")
     if not 0.0 < open_set_fraction < 1.0:
         raise ValueError("open_set_fraction must be between 0 and 1.")
+    if queries_per_identity < 0:
+        raise ValueError("queries_per_identity must be >= 0 (0 = no cap).")
     if output.exists() and any(output.iterdir()):
         if not overwrite:
             raise FileExistsError(
@@ -96,11 +99,14 @@ def create_split(
     labels_path = output / "labels.csv"
     rows: list[tuple[str, str]] = [("query_image", "true_id")]
 
+    n_known_queries = 0
     for identity in sorted(known_ids):
         images = usable[identity][:]
         rng.shuffle(images)
         refs = images[:refs_per_identity]
         queries = images[refs_per_identity:]
+        if queries_per_identity:
+            queries = queries[:queries_per_identity]
         for idx, src in enumerate(refs, start=1):
             dst = ref_dir / identity / f"{identity}_ref{idx}{src.suffix.lower()}"
             _copy(src, dst)
@@ -108,14 +114,19 @@ def create_split(
             name = f"{identity}_query{idx}{src.suffix.lower()}"
             _copy(src, query_dir / name)
             rows.append((name, identity))
+            n_known_queries += 1
 
+    n_open_queries = 0
     for identity in sorted(open_ids):
         images = usable[identity][:]
         rng.shuffle(images)
+        if queries_per_identity:
+            images = images[:queries_per_identity]
         for idx, src in enumerate(images, start=1):
             name = f"{identity}_unknown{idx}{src.suffix.lower()}"
             _copy(src, query_dir / name)
             rows.append((name, "unknown"))
+            n_open_queries += 1
 
     labels_path.parent.mkdir(parents=True, exist_ok=True)
     with labels_path.open("w", newline="") as f:
@@ -128,10 +139,13 @@ def create_split(
                 f"source={source.resolve()}",
                 f"seed={seed}",
                 f"refs_per_identity={refs_per_identity}",
+                f"queries_per_identity={queries_per_identity}",
                 f"open_set_fraction={open_set_fraction}",
                 f"known_identities={len(known_ids)}",
                 f"open_set_identities={len(open_ids)}",
-                f"query_images={len(rows) - 1}",
+                f"known_query_images={n_known_queries}",
+                f"open_set_query_images={n_open_queries}",
+                f"query_images={n_known_queries + n_open_queries}",
             ]
         )
         + "\n"
@@ -144,6 +158,15 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--source", type=Path, required=True, help="Input identity-folder root.")
     p.add_argument("--output", type=Path, required=True, help="Output split directory.")
     p.add_argument("--refs-per-identity", type=int, default=2)
+    p.add_argument(
+        "--queries-per-identity",
+        type=int,
+        default=0,
+        help=(
+            "Cap on query images per identity (applies to known AND "
+            "open-set identities). 0 = no cap, take all remaining images."
+        ),
+    )
     p.add_argument("--open-set-fraction", type=float, default=0.10)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--overwrite", action="store_true")
@@ -159,6 +182,7 @@ def main() -> None:
         open_set_fraction=args.open_set_fraction,
         seed=args.seed,
         overwrite=args.overwrite,
+        queries_per_identity=args.queries_per_identity,
     )
     print(f"Wrote split labels -> {labels}")
 

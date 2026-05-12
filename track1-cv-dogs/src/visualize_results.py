@@ -53,6 +53,7 @@ def render_grid(
     query_dir: Path,
     output_path: Path,
     top_k: int = 5,
+    max_queries: int = 12,
 ) -> Path:
     gallery = discover_gallery(reference_dir)
     shown_k = min(top_k, len(gallery))
@@ -60,6 +61,8 @@ def render_grid(
     queries = list(results["query"].drop_duplicates())
     if not queries:
         raise ValueError("Results CSV contains no queries.")
+    if max_queries and max_queries > 0:
+        queries = queries[:max_queries]
 
     n_rows = len(queries)
     n_cols = 1 + shown_k
@@ -131,6 +134,13 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--query", type=Path, required=True)
     p.add_argument("--output", type=Path, required=True)
     p.add_argument("--top-k", type=int, default=5)
+    p.add_argument(
+        "--max-queries",
+        type=int,
+        default=12,
+        help="Cap on how many queries to draw (0 = no cap; rendering a "
+        "large evaluation set in one figure is extremely slow).",
+    )
     return p.parse_args()
 
 
@@ -141,7 +151,14 @@ def main() -> None:
     )
     args = parse_args()
     results = pd.read_csv(args.results)
-    out = render_grid(results, args.reference, args.query, args.output, top_k=args.top_k)
+    out = render_grid(
+        results,
+        args.reference,
+        args.query,
+        args.output,
+        top_k=args.top_k,
+        max_queries=args.max_queries,
+    )
     logger.info("Saved %s", out)
 
 

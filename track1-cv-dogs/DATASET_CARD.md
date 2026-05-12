@@ -66,16 +66,18 @@ To regenerate (or extend):
 python data/sample/_generate_sample.py
 ```
 
-## 2. DogFaceNet (recommended for real evaluation, not committed)
+## 2. DogFaceNet (used for real evaluation, not committed)
 
 | Field | Value |
 |---|---|
-| Source | <https://github.com/GuillaumeMougeot/DogFaceNet> |
+| Upstream source | <https://github.com/GuillaumeMougeot/DogFaceNet> |
+| HuggingFace mirror used here | `dimidagd/DogFaceNet_224resize` |
 | Description | Dog face images annotated with individual identity. |
-| Approx. scale | ~8,000 images across ~1,400 individual dogs (varies by release). |
-| Image content | Cropped, roughly frontal dog faces. |
-| License | See upstream repository; we do not redistribute. |
+| Total scale (mirror) | 8,363 images across 1,393 individual dogs. |
+| Image content | Cropped, roughly frontal dog faces, pre-resized to 224x224 RGB. |
+| License | See upstream repository; not redistributed by this repo. |
 | Intended task | Individual dog face re-identification. |
+| Storage | Not committed; pulled on demand via `src/fetch_dogfacenet.py`. |
 
 ### Why DogFaceNet rather than Stanford Dogs or similar
 
@@ -84,35 +86,74 @@ not even that). ReID requires **per-individual** identity labels:
 multiple images of the same specific dog. DogFaceNet is one of the few
 public datasets that supplies this for dogs.
 
-### Splits used in this prototype
+### Fetching the dataset
 
-We do not commit DogFaceNet or a real split file. Reviewers running on
-real data should construct one with `src/prepare_reid_split.py`, which
-implements the following protocol:
-
-1. Shuffle identities (not images) with a fixed seed.
-2. Reserve ~10% of identities as **open-set unknowns** -- they appear in
-   the query set but never in the reference gallery.
-3. From the remaining ~90% of identities, take 1-2 images per identity
-   as the gallery reference (`reference/<identity>/...`).
-4. Take the remaining images of those identities as closed-set queries.
-5. Mix in the open-set identities' images as additional queries, with
-   `true_id = "unknown"` in `labels.csv`.
-
-Example:
+`src/fetch_dogfacenet.py` downloads the HuggingFace parquet mirror,
+keeps the top-N identities by image count (subject to a minimum
+images-per-identity floor), and writes the result as identity folders
+that `src/prepare_reid_split.py` can consume directly. It also writes
+`_fetch_manifest.txt` recording the source, parameters, and selected
+identity IDs.
 
 ```bash
-python src/prepare_reid_split.py \
-    --source data/dogfacenet/images \
-    --output data/processed/dogfacenet_seed0 \
-    --refs-per-identity 2 \
-    --open-set-fraction 0.10 \
-    --seed 0
+python src/fetch_dogfacenet.py \
+    --output data/dogfacenet/source \
+    --max-identities 100 \
+    --min-images-per-identity 3
 ```
+
+The cap to 100 identities is a CPU-runtime compromise, not a property
+of the dataset. Re-running with `--max-identities 1393` evaluates on
+all identities.
+
+### Splits used in this prototype
+
+`src/prepare_reid_split.py` builds an identity-disjoint split with this
+protocol:
+
+1. Shuffle identities (not images) with a fixed seed.
+2. Reserve `open_set_fraction` of identities as **open-set unknowns** -
+   they appear in the query set but never in the reference gallery.
+3. From the remaining identities, take `refs_per_identity` images per
+   identity as the gallery reference (`reference/<identity>/...`).
+4. Take up to `queries_per_identity` of the remaining images of those
+   identities as closed-set queries (`true_id = <identity>`).
+5. Mix in up to `queries_per_identity` images from the open-set
+   identities as additional queries, with `true_id = "unknown"`.
+6. Write `labels.csv` and `split_manifest.txt`.
 
 Identities must be **disjoint** between gallery and "unknown" queries.
 If the same individual appears in both, the open-set evaluation is
 invalid.
+
+The split used to produce the numbers in `REPORT.md` and `MODEL_CARD.md`
+was:
+
+```text
+source = data/dogfacenet/source (top 100 identities, min 3 images each)
+seed = 0
+refs_per_identity = 2
+queries_per_identity = 3
+open_set_fraction = 0.1
+known_identities = 90
+open_set_identities = 10
+known_query_images = 270
+open_set_query_images = 30
+query_images = 300
+```
+
+Reproducer:
+
+```bash
+python src/prepare_reid_split.py \
+    --source data/dogfacenet/source \
+    --output data/dogfacenet/split \
+    --refs-per-identity 2 \
+    --queries-per-identity 3 \
+    --open-set-fraction 0.10 \
+    --seed 0 \
+    --overwrite
+```
 
 ### Required folder layout (same as the sample)
 
@@ -136,8 +177,13 @@ labels.csv                                    # columns: query_image,true_id
 - **No metadata.** Age, sex, coat colour, and other attributes are not
   provided in our pipeline. They could help with negative mining if
   available.
-- **No identity-disjoint test set is shipped.** Reviewers must
-  construct one as above for an honest evaluation.
+- **No identity-disjoint test set is shipped.** Reviewers reproduce the
+  split locally with `src/fetch_dogfacenet.py` + `src/prepare_reid_split.py`
+  (commands above). The committed `data/sample/` is for smoke testing
+  only and is not a real evaluation set.
+- **100-identity evaluation cap.** Reported numbers use the top 100
+  most-photographed identities. Running on all 1,393 identities would
+  almost certainly lower Rank-1 and is the obvious next experiment.
 
 ## Out-of-scope datasets
 

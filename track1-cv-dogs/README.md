@@ -11,9 +11,26 @@ This repository contains a runnable prototype for **individual dog re-identifica
 - Baselines: ResNet50 and EfficientNet-B0.
 - Outputs: ranked CSV, metrics JSON, top-match visualization, success/failure visualizations, model comparison CSV.
 - Open-set decisions: `match`, `possible_match`, `unknown`.
-- Important limitation: committed sample data is synthetic and only proves the pipeline runs.
+- Evaluated on a 100-identity DogFaceNet split (HuggingFace mirror, identity-disjoint, 300 queries with 30 open-set unknowns). Headline numbers below.
 
-The current repository includes a deterministic synthetic sample under `data/sample/`. It is useful for smoke testing, but it is **not real ReID evidence**. For final benchmark claims, run the same commands on an identity-disjoint DogFaceNet or curated real-dog split.
+The committed sample under `data/sample/` is deterministic synthetic data for smoke testing only; numbers in the **Real Results** section below come from DogFaceNet, not the sample.
+
+## Real Results
+
+DogFaceNet (`dimidagd/DogFaceNet_224resize` on HuggingFace), 100 identities, `seed=0`, `refs_per_identity=2`, `queries_per_identity=3`, `open_set_fraction=0.10`. Default thresholds `tau_match=0.70`, `tau_possible=0.55`.
+
+| metric | DINOv2 ViT-S/14 | ResNet50 | EfficientNet-B0 |
+|---|---|---|---|
+| Rank-1 | **0.893** | 0.826 | 0.856 |
+| Rank-5 | **0.985** | 0.959 | 0.978 |
+| mAP | **0.935** | 0.879 | 0.910 |
+| Hard-match F1 | **0.811** | 0.792 | 0.758 |
+| Open-set AUROC | **0.871** | 0.866 | 0.847 |
+| Open-set unknown accuracy | 0.100 | 0.033 | **0.167** |
+| Non-match rejection rate (DINOv2) | 0.800 | - | - |
+| CPU latency (sec/query image) | 0.078 | 0.067 | **0.022** |
+
+Reproduce these numbers with the commands in [Real Evaluation Workflow](#real-evaluation-workflow).
 
 ## Why This Approach
 
@@ -40,6 +57,7 @@ track1-cv-dogs/
     visualize_cases.py       # success/failure visualizations
     compare_models.py        # backbone comparison
     prepare_reid_split.py    # identity-disjoint split builder
+    fetch_dogfacenet.py      # pulls DogFaceNet from HuggingFace into identity folders
     utils.py                 # image IO, embeddings, ranking, thresholds
   tests/
     test_evaluate.py
@@ -132,47 +150,74 @@ results/failure_cases.png
 
 ## Real Evaluation Workflow
 
-Use an identity-folder dataset such as DogFaceNet:
+The repo ships `src/fetch_dogfacenet.py` to pull DogFaceNet from its HuggingFace mirror (`dimidagd/DogFaceNet_224resize`) and write it as identity folders. Dataset images are gitignored; only outputs in `results/` and the manifest in `data/dogfacenet/split/split_manifest.txt` are reproducible artifacts.
 
-```text
-data/dogfacenet/images/
-  dog_001/*.jpg
-  dog_002/*.jpg
-  ...
+Fetch the top-N most-photographed identities (capped at 100 here to keep CPU runtime reasonable):
+
+```bash
+python src/fetch_dogfacenet.py ^
+  --output data/dogfacenet/source ^
+  --max-identities 100 ^
+  --min-images-per-identity 3
 ```
 
 Create an identity-disjoint split:
 
 ```bash
 python src/prepare_reid_split.py ^
-  --source data/dogfacenet/images ^
-  --output data/processed/dogfacenet_seed0 ^
+  --source data/dogfacenet/source ^
+  --output data/dogfacenet/split ^
   --refs-per-identity 2 ^
+  --queries-per-identity 3 ^
   --open-set-fraction 0.10 ^
   --seed 0 ^
   --overwrite
 ```
 
-Then run the same pipeline:
+`--queries-per-identity` caps query images per identity so the open-set and closed-set query counts stay balanced (here: 270 known + 30 unknown queries). All parameters are recorded in `split_manifest.txt`.
+
+Run the pipeline, evaluate with a threshold sweep, and produce visualizations:
 
 ```bash
 python src/reid_pipeline.py ^
-  --reference data/processed/dogfacenet_seed0/reference ^
-  --query data/processed/dogfacenet_seed0/query ^
-  --output results/ranked_results_dogfacenet.csv ^
+  --reference data/dogfacenet/split/reference ^
+  --query data/dogfacenet/split/query ^
+  --output results/ranked_results.csv ^
   --top-k 10 ^
   --model dinov2
-```
 
-```bash
 python src/evaluate.py ^
-  --results results/ranked_results_dogfacenet.csv ^
-  --labels data/processed/dogfacenet_seed0/labels.csv ^
-  --sweep ^
-  --output results/metrics_dogfacenet.json
+  --results results/ranked_results.csv ^
+  --labels data/dogfacenet/split/labels.csv ^
+  --threshold 0.70 ^
+  --possible-threshold 0.55 ^
+  --output results/metrics.json ^
+  --sweep
+
+python src/visualize_results.py ^
+  --results results/ranked_results.csv ^
+  --reference data/dogfacenet/split/reference ^
+  --query data/dogfacenet/split/query ^
+  --output results/top_matches.png ^
+  --top-k 5 ^
+  --max-queries 12
+
+python src/visualize_cases.py ^
+  --results results/ranked_results.csv ^
+  --labels data/dogfacenet/split/labels.csv ^
+  --reference data/dogfacenet/split/reference ^
+  --query data/dogfacenet/split/query ^
+  --success-output results/success_cases.png ^
+  --failure-output results/failure_cases.png
+
+python src/compare_models.py ^
+  --reference data/dogfacenet/split/reference ^
+  --query data/dogfacenet/split/query ^
+  --labels data/dogfacenet/split/labels.csv ^
+  --output results/model_comparison.csv
 ```
 
-Use `--sweep` only on validation data. Freeze selected thresholds before reporting final test metrics.
+`--sweep` writes `results/metrics_sweep.csv` with `tau_match` over `[0.50, 1.00]` step 0.02. Use it only on validation data; freeze the chosen thresholds before final test reporting. `--max-queries` on the top-matches visualization caps the rendered grid so it stays a manageable size on large splits.
 
 ## Metrics
 
@@ -206,12 +251,12 @@ See `DATASET_CARD.md` for details.
 
 ## Limitations
 
-- No dog-specific fine-tuning.
-- No detection or segmentation before embedding.
-- Global image embeddings can learn background or pose artifacts.
+- Real evaluation is capped at the top 100 DogFaceNet identities (CPU runtime). Full 1,393-identity scaling has not been measured and would likely lower Rank-1.
+- No dog-specific fine-tuning; embeddings are frozen.
+- No detection or segmentation before embedding; global features can encode background or pose.
 - Prototype averaging can lose view-specific information.
-- Thresholds are dataset-dependent.
-- Synthetic sample metrics are not evidence of real-world performance.
+- Thresholds are dataset-dependent. Defaults are starting points; production use requires tuning on a validation fold.
+- The committed `data/sample/` is synthetic and is for smoke testing only - its numbers are not informative.
 - Real deployment would need quality checks, human review, and farm-specific validation.
 
 ## Tests
@@ -225,9 +270,9 @@ python -m compileall src tests
 
 Highest-value improvements:
 
-1. Run and report a real DogFaceNet or curated real-dog evaluation.
-2. Add real positive, negative, and unknown-query artifacts to the PR.
-3. Tune open-set thresholds on validation data and freeze them for test metrics.
-4. Compare prototype averaging with max-over-reference-image retrieval.
-5. Add dog detection or segmentation before embedding extraction.
-6. Add image-quality checks for blur, occlusion, and low resolution.
+1. Re-run on the full 1,393-identity DogFaceNet to characterise scaling behaviour.
+2. Tune open-set thresholds on a held-out validation fold and freeze them before final test reporting.
+3. Compare prototype averaging with max-over-reference-image retrieval.
+4. Add dog detection or segmentation before embedding extraction.
+5. Add image-quality checks for blur, occlusion, and low resolution.
+6. Add a small triplet/ArcFace fine-tune on identity pairs once enough data is available.
